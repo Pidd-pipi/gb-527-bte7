@@ -37,6 +37,9 @@ func (generator *CandidateGenerator) Generate(group ConflictGroup) []Suggestion 
 	if relocation, ok := generator.compatibleStation(group); ok {
 		suggestions = append(suggestions, relocation)
 	}
+	if shift, ok := generator.timeShift(group); ok {
+		suggestions = append(suggestions, shift)
+	}
 	suggestions = append(suggestions, generator.manual(group))
 	StableSortSuggestions(suggestions)
 	return suggestions
@@ -202,8 +205,87 @@ func (generator *CandidateGenerator) alternateAvailable(candidate, affected mode
 	return stationConcurrency < station.AntennaCount
 }
 
-func (generator *CandidateGenerator) manual(group ConflictGroup) Suggestion {
-	duration := 0
+const (
+	maxTimeShiftMinutes  = 15
+	timeShiftStepMinutes = 1
+)
+
+// timeShift keeps satellite, band, and contact duration unchanged and searches
+// ±maxTimeShiftMinutes around the original start for a gap that clears station
+// capacity, the station slew buffer, and same-satellite overlap. Locked windows
+// never move; conflict types that a pure time shift cannot repair are skipped.
+func (generator *CandidateGenerator) timeShift(group ConflictGroup) (Suggestion, bool) {
+	if group.ConflictType == constants.ConflictTypeBandMismatch || group.ConflictType == constants.ConflictTypeDurationShortfall {
+		return Suggestion{}, false
+	}
+	for _, affected := range group.Windows {
+		if affected.Locked {
+			continue
+		}
+		station, ok := generator.stations[affected.StationID]
+		if !ok || station.StationStatus != "active" {
+			continue
+		}
+		buffer := time.Duration(station.SlewBufferSec) * time.Second
+		duration := affected.EndAt.Sub(affected.StartAt)
+		for offset := timeShiftStepMinutes; offset <= maxTimeShiftMinutes; offset += timeShiftStepMinutes {
+			for _, direction := range []time.Duration{-1, 1} {
+				shift := direction * time.Duration(offset) * time.Minute
+				start := affected.StartAt.Add(shift)
+				end := start.Add(duration)
+				concurrency := generator.stationConcurrencyAt(affected, station.ID, start, end, buffer)
+				if concurrency >= station.AntennaCount || !generator.satelliteFree(affected, start, end) {
+					continue
+				}
+				minutes := int(shift.Minutes())
+				originalStart, originalEnd := affected.StartAt, affected.EndAt
+				keep := make([]uint, 0, len(group.Windows)-1)
+				for _, window := range group.Windows {
+					if window.ID != affected.ID {
+						keep = append(keep, window.ID)
+					}
+				}
+				return Suggestion{
+					ActionKey: fmt.Sprintf("timeshift-%+d-window-%d", minutes, affected.ID), ActionType: "shift_window_time",
+					Title:         fmt.Sprintf("Shift window #%d by %+d min on the same station", affected.ID, minutes),
+					Rationale:     "Keeps satellite, band, and contact duration unchanged; picks the smallest ±15 minute offset that clears capacity and the station slew buffer.",
+					KeepWindowIDs: keep, MoveWindowIDs: []uint{affected.ID},
+					ShiftMinutes: minutes, OriginalStartAt: &originalStart, OriginalEndAt: &originalEnd, ShiftedStartAt: &start, ShiftedEndAt: &end,
+					Score: Score(generator.weights, 0, 0, affected.DurationSec(), station.AntennaCount-concurrency-1),
+				}, true
+			}
+		}
+	}
+	return Suggestion{}, false
+}
+
+func (generator *CandidateGenerator) stationConcurrencyAt(affected model.ContactWindow, stationID uint, start, end time.Time, buffer time.Duration) int {
+	count := 0
+	shifted := Interval{Window: affected, Start: start.Add(-buffer), End: end.Add(buffer)}
+	for _, existing := range generator.allWindows {
+		if existing.ID == affected.ID || existing.StationID != stationID || existing.WindowStatus == constants.WindowStatusCancelled {
+			continue
+		}
+		if Overlaps(BuildInterval(existing, buffer, buffer), shifted) {
+			count++
+		}
+	}
+	return count
+}
+
+func (generator *CandidateGenerator) satelliteFree(affected model.ContactWindow, start, end time.Time) bool {
+	for _, existing := range generator.allWindows {
+		if existing.ID == affected.ID || existing.SatelliteID != affected.SatelliteID || existing.WindowStatus == constants.WindowStatusCancelled {
+			continue
+		}
+		if existing.StartAt.Before(end) && start.Before(existing.EndAt) {
+			return false
+		}
+	}
+	return true
+}
+
+func (generator *CandidateGenerator) manual(group ConflictGroup) Suggestion {	duration := 0
 	ids := make([]uint, 0, len(group.Windows))
 	locked := false
 	for _, window := range group.Windows {
