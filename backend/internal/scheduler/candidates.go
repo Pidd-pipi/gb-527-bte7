@@ -37,6 +37,9 @@ func (generator *CandidateGenerator) Generate(group ConflictGroup) []Suggestion 
 	if relocation, ok := generator.compatibleStation(group); ok {
 		suggestions = append(suggestions, relocation)
 	}
+	if microShift, ok := generator.microShiftWindow(group); ok {
+		suggestions = append(suggestions, microShift)
+	}
 	suggestions = append(suggestions, generator.manual(group))
 	StableSortSuggestions(suggestions)
 	return suggestions

@@ -31,6 +31,12 @@ type ResolutionSuggestion struct {
 	MoveWindowIDs     []uint         `json:"move_window_ids"`
 	TargetStationID   *uint          `json:"target_station_id,omitempty"`
 	AlternateWindowID *uint          `json:"alternate_window_id,omitempty"`
+	ShiftWindowID     *uint          `json:"shift_window_id,omitempty"`
+	ShiftMinutes      int            `json:"shift_minutes,omitempty"`
+	OriginalStart     *time.Time     `json:"original_start_at,omitempty"`
+	OriginalEnd       *time.Time     `json:"original_end_at,omitempty"`
+	ShiftedStart      *time.Time     `json:"shifted_start_at,omitempty"`
+	ShiftedEnd        *time.Time     `json:"shifted_end_at,omitempty"`
 	RequiresManual    bool           `json:"requires_manual"`
 	Score             ScoreBreakdown `json:"score"`
 }

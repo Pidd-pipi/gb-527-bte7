@@ -20,6 +20,12 @@ export interface ResolutionSuggestion {
   move_window_ids: number[];
   target_station_id?: number;
   alternate_window_id?: number;
+  shift_window_id?: number;
+  shift_minutes?: number;
+  original_start_at?: string;
+  original_end_at?: string;
+  shifted_start_at?: string;
+  shifted_end_at?: string;
   requires_manual: boolean;
   score: ScoreBreakdown;
 }

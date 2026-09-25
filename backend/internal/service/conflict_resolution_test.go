@@ -13,6 +13,7 @@ import (
 	"satellite-contact-window-deconfliction/backend/internal/dto"
 	"satellite-contact-window-deconfliction/backend/internal/model"
 	"satellite-contact-window-deconfliction/backend/internal/repository"
+	"satellite-contact-window-deconfliction/backend/internal/scheduler"
 )
 
 func TestReviewDetectsChangedWindowAndRejectRemainsAvailable(t *testing.T) {
@@ -36,7 +37,7 @@ func TestReviewDetectsChangedWindowAndRejectRemainsAvailable(t *testing.T) {
 	}
 	base := time.Now().UTC().Truncate(time.Second)
 	windows := []model.ContactWindow{
-		{StationID: station.ID, SatelliteID: assets[0].ID, StartAt: base, EndAt: base.Add(10 * time.Minute), Band: "S", WindowStatus: constants.WindowStatusSubmitted, Priority: 8, SourceVersion: "test-source", Version: 1},
+		{StationID: station.ID, SatelliteID: assets[0].ID, StartAt: base, EndAt: base.Add(10 * time.Minute), Band: "S", WindowStatus: constants.WindowStatusSubmitted, Priority: 8, Locked: true, SourceVersion: "test-source", Version: 1},
 		{StationID: station.ID, SatelliteID: assets[1].ID, StartAt: base.Add(time.Minute), EndAt: base.Add(9 * time.Minute), Band: "S", WindowStatus: constants.WindowStatusSubmitted, Priority: 5, SourceVersion: "test-source", Version: 1},
 	}
 	if err := db.Create(&windows).Error; err != nil {
@@ -62,6 +63,21 @@ func TestReviewDetectsChangedWindowAndRejectRemainsAvailable(t *testing.T) {
 	}
 	if target.ID == 0 || target.ResolutionStatus != constants.ResolutionStatusProposed {
 		t.Fatalf("expected proposed station conflict, got %+v", target)
+	}
+	var microShift *dto.ResolutionSuggestion
+	for index := range target.Suggestions {
+		if target.Suggestions[index].ActionType == scheduler.MicroShiftActionType {
+			microShift = &target.Suggestions[index]
+		}
+	}
+	if microShift == nil || microShift.ShiftWindowID == nil || *microShift.ShiftWindowID != windows[1].ID {
+		t.Fatalf("expected a micro-stagger suggestion for window %d, got %+v", windows[1].ID, target.Suggestions)
+	}
+	if microShift.ShiftMinutes != -9 || microShift.OriginalStart == nil || microShift.ShiftedStart == nil {
+		t.Fatalf("expected a nine minute earlier shift with both UTC intervals, got %+v", microShift)
+	}
+	if !microShift.OriginalStart.Equal(windows[1].StartAt) || !microShift.ShiftedStart.Equal(windows[1].StartAt.Add(-9*time.Minute)) {
+		t.Fatalf("shifted interval must preserve duration and band: %+v", microShift)
 	}
 	target, err = service.Submit(target.ID, dto.ConflictActionRequest{ExpectedVersion: target.Version}, actor, "test-submit")
 	if err != nil {
